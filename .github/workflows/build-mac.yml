@@ -1,0 +1,49 @@
+name: Build macOS App
+
+# Wann soll der Server starten? 
+# Bei jedem Push auf den 'main' Branch ODER manuell über den "Run workflow" Button in GitHub
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build-mac:
+    # Wir mieten uns kostenlos einen Mac-Server bei GitHub
+    runs-on: macos-latest
+    
+    steps:
+      - name: Code auschecken
+        uses: actions/checkout@v4
+
+      - name: Node.js installieren
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Rust Toolchain installieren (inkl. Architektur-Ziele für Universal Binary)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin, x86_64-apple-darwin
+
+      - name: Rust Cache aktivieren (Macht spätere Builds viel schneller)
+        uses: Swatinem/rust-cache@v2
+
+      - name: JavaScript Abhängigkeiten installieren
+        run: npm install
+
+      - name: Tauri Build & Release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          # GitHub erstellt dieses Token automatisch für dich, damit der Bot Dateien hochladen darf
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          # Zieht sich die Versionsnummer automatisch aus deiner tauri.conf.json
+          tagName: app-v__VERSION__ 
+          releaseName: 'BandTool v__VERSION__'
+          releaseBody: 'Automatischer Build für macOS.'
+          releaseDraft: true # Erstellt das Release erst als Entwurf, den du absegnen kannst
+          prerelease: false
+          # WICHTIG: Das ist der magische Befehl für Intel + Apple Silicon Macs
+          args: --target universal-apple-darwin

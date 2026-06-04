@@ -1,0 +1,58 @@
+name: Build Windows & Linux App
+
+# Wann soll der Server starten?
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      # Wenn ein Build fehlschlägt, soll der andere trotzdem weiterlaufen
+      fail-fast: false 
+      matrix:
+        # Hier definieren wir unsere beiden Betriebssysteme
+        platform: [windows-latest, ubuntu-22.04]
+
+    # Der Runner wählt das OS aus der Matrix oben
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - name: Code auschecken
+        uses: actions/checkout@v4
+
+      - name: Node.js installieren
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Rust Toolchain installieren
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust Cache aktivieren (Macht Builds schneller)
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+
+      # WICHTIG: Diese Abhängigkeiten braucht Tauri NUR auf Linux (für UI und Audio)
+      - name: Install Linux dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libasound2-dev
+
+      - name: JavaScript Abhängigkeiten installieren
+        run: npm install
+
+      - name: Tauri Build & Release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: app-v__VERSION__ 
+          releaseName: 'BandTool v__VERSION__'
+          releaseBody: 'Automatischer Build für Windows (.exe) und Linux (.deb / .AppImage).'
+          releaseDraft: true
+          prerelease: false
