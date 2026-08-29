@@ -15,6 +15,7 @@ use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager};
@@ -27,6 +28,9 @@ const STABILITY_INTERVAL: Duration = Duration::from_millis(1000);
 const STABILITY_MAX_CHECKS: u32 = 30;
 /// Falls das Peaks-Fenster nicht antwortet, soll die Pipeline weiterlaufen.
 const PEAKS_TIMEOUT: Duration = Duration::from_secs(120);
+/// Wie oft der Ordner unabhaengig vom Watcher nachgesehen wird. Notwendig fuer
+/// den Streaming-Modus von Drive, wo Dateisystem-Ereignisse ausbleiben koennen.
+const RESCAN_INTERVAL: Duration = Duration::from_secs(300);
 
 #[derive(serde::Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -82,6 +86,9 @@ pub struct SyncState {
     /// Belegt / Limit in Bytes, vom Feed-Poller fortgeschrieben. Zeigt im Tray,
     /// wie viel Luft bis zum R2-Freikontingent bleibt.
     pub storage: Mutex<Option<(u64, u64)>>,
+    /// Zaehlt hoch, sobald sync::start neu aufgerufen wird. Faeden aelterer
+    /// Generationen beenden sich daran selbst.
+    generation: AtomicU64,
     sender: Mutex<Option<mpsc::UnboundedSender<PathBuf>>>,
 }
 
@@ -93,8 +100,18 @@ impl SyncState {
             peaks: PeaksRegistry::default(),
             status: Mutex::new("Nicht eingerichtet".to_string()),
             storage: Mutex::new(None),
+            generation: AtomicU64::new(0),
             sender: Mutex::new(None),
         }
+    }
+
+    /// Entwertet alle laufenden Faeden und gibt die neue Generation zurueck.
+    fn next_generation(&self) -> u64 {
+        self.generation.fetch_add(1, Ordering::SeqCst) + 1
+    }
+
+    fn is_current_generation(&self, generation: u64) -> bool {
+        self.generation.load(Ordering::SeqCst) == generation
     }
 
     pub fn set_status(&self, text: impl Into<String>) {
@@ -194,7 +211,16 @@ fn wait_until_stable(path: &Path) -> Option<(u64, u64)> {
     None
 }
 
-/// Streamend hashen - eine 40-MB-Datei muss nicht am Stueck in den Speicher.
+fn hash_bytes(bytes: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    format!("{:x}", hasher.finalize())
+}
+
+/// Streamend hashen, ohne die Datei am Stueck in den Speicher zu holen.
+/// Wird beim Startlauf benutzt, um zu erkennen, ob eine Datei schon bekannt
+/// ist - da faellt sonst unnoetig Inhalt an.
+#[cfg_attr(not(test), allow(dead_code))]
 fn hash_file(path: &Path) -> std::io::Result<String> {
     let mut file = std::fs::File::open(path)?;
     let mut hasher = Sha256::new();
@@ -234,14 +260,25 @@ async fn ingest_one(app: &AppHandle, path: PathBuf) {
         return; // unveraendert seit dem letzten Lauf
     }
 
-    state.set_status(format!("{name}: hashen"));
-    let hash = match hash_file(&path) {
-        Ok(hash) => hash,
+    // Einmal lesen, nicht zweimal. Im Streaming-Modus von Google Drive liegt
+    // die Datei nicht wirklich auf der Platte - jeder Lesevorgang laedt sie
+    // aus der Cloud. Getrennt hashen und hochladen wuerde sie zweimal ziehen.
+    state.set_status(format!("{name}: lesen"));
+    let bytes = match std::fs::read(&path) {
+        Ok(bytes) => bytes,
         Err(err) => {
             state.set_status(format!("{name}: nicht lesbar ({err})"));
             return;
         }
     };
+    // Der Stabilitaetscheck lief vor dem Lesen. Waechst die Datei genau
+    // dazwischen weiter, passen Groesse und Inhalt nicht mehr zusammen -
+    // dann lieber abbrechen als einen falschen Hash festschreiben.
+    if bytes.len() as u64 != size {
+        state.set_status(format!("{name}: Groesse hat sich beim Lesen geaendert"));
+        return;
+    }
+    let hash = hash_bytes(&bytes);
 
     let api = Api::new(&settings.api_base_url, &settings.device_token);
     let song = song_name_for(&path, &root);
@@ -276,13 +313,6 @@ async fn ingest_one(app: &AppHandle, path: PathBuf) {
     }
 
     state.set_status(format!("{name}: hochladen"));
-    let bytes = match std::fs::read(&path) {
-        Ok(bytes) => bytes,
-        Err(err) => {
-            state.set_status(format!("{name}: nicht lesbar ({err})"));
-            return;
-        }
-    };
     if let Err(err) = api.upload_blob(&prepared.version_id, bytes).await {
         state.set_status(format!("{name}: Upload fehlgeschlagen ({err})"));
         return;
@@ -340,6 +370,11 @@ pub fn start(app: &AppHandle) {
     let state = app.state::<Arc<SyncState>>().inner().clone();
     let settings = state.settings_snapshot();
 
+    // Jeder Aufruf entwertet die Faeden des vorherigen. Ohne das laeuft nach
+    // jedem Speichern der Einstellungen ein weiterer Nachlauf mit, der noch
+    // den alten Ordner beobachtet.
+    let generation = state.next_generation();
+
     if !settings.is_configured() {
         state.set_status("Nicht eingerichtet - Token und Ordner fehlen");
         return;
@@ -374,12 +409,28 @@ pub fn start(app: &AppHandle) {
         }
     });
 
+    // Startlauf, danach in Ruhe weiter nachsehen.
+    //
+    // Der Watcher allein reicht nicht, wenn der pre_pro-Ordner im
+    // Streaming-Modus von Google Drive liegt: dort ist das Laufwerk virtuell,
+    // und ob eine neu synchronisierte Datei ein Dateisystem-Ereignis ausloest,
+    // ist nicht verlaesslich. Der regelmaessige Nachlauf findet sie auch ohne.
+    // Auf einem gespiegelten Ordner ist er schlicht ueberfluessig und billig -
+    // bekannte Dateien filtert der Index heraus, bevor gelesen wird.
     let state_for_scan = state.clone();
     let scan_root = root.clone();
     std::thread::spawn(move || {
         state_for_scan.set_status("Startlauf");
         scan_all(&state_for_scan, &scan_root);
         state_for_scan.set_status("Beobachte Ordner");
+
+        loop {
+            std::thread::sleep(RESCAN_INTERVAL);
+            if !state_for_scan.is_current_generation(generation) {
+                return; // Einstellungen haben sich geaendert, ein neuer Lauf uebernimmt
+            }
+            scan_all(&state_for_scan, &scan_root);
+        }
     });
 
     let state_for_watch = state.clone();
@@ -514,6 +565,23 @@ mod tests {
         // 1 KiB Start plus dreimal 1 KiB nachgeschoben. Ein zu frueher Abbruch
         // haette 1024, 2048 oder 3072 gemeldet.
         assert_eq!(size, 4096, "hat zu frueh abgebrochen und eine halbe Datei gemeldet");
+    }
+
+    #[test]
+    fn eine_neue_generation_entwertet_die_vorherige() {
+        // Der Nachlauf-Faden prueft daran, ob er noch zustaendig ist. Ohne das
+        // beobachtet nach jedem Speichern der Einstellungen ein weiterer Faden
+        // den alten Ordner mit.
+        let state = SyncState::new();
+        let erste = state.next_generation();
+        assert!(state.is_current_generation(erste));
+
+        let zweite = state.next_generation();
+        assert!(state.is_current_generation(zweite));
+        assert!(
+            !state.is_current_generation(erste),
+            "der alte Faden haelt sich faelschlich fuer zustaendig"
+        );
     }
 
     #[test]

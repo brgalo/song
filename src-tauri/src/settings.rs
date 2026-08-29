@@ -31,10 +31,17 @@ fn index_path() -> PathBuf {
     config_dir().join("index.json")
 }
 
+/// Die Adresse der Band-Installation. Oeffentlich und fuer alle gleich,
+/// deshalb einkompiliert statt abgefragt - niemand soll sie beim ersten Start
+/// abtippen muessen. Kein Geheimnis: ohne gueltiges Geraetetoken kommt an
+/// dieser Adresse niemand weiter. Im Einrichtungsschritt ueberschreibbar.
+pub const DEFAULT_API_BASE_URL: &str = "https://songou-api.andyrive6.workers.dev";
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct Settings {
     /// Oeffentliche URL, kein Geheimnis.
+    #[serde(default = "default_api_base_url")]
     pub api_base_url: String,
     /// Geheim und geraetegebunden. Kommt zur Laufzeit aus /pair und wird
     /// bewusst NICHT einkompiliert - aus einer Binary waere es auslesbar.
@@ -46,10 +53,14 @@ pub struct Settings {
     pub last_feed_seen: String,
 }
 
+fn default_api_base_url() -> String {
+    DEFAULT_API_BASE_URL.to_string()
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            api_base_url: String::new(),
+            api_base_url: default_api_base_url(),
             device_token: String::new(),
             pre_pro_path: String::new(),
             notifications_enabled: true,

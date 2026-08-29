@@ -135,3 +135,23 @@ wurden. GitHub-Secrets schuetzen den Build-Vorgang, nicht das Ergebnis. Genau
 deshalb holt sich jeder sein Geraetetoken zur Laufzeit ueber `/pair`, statt ein
 gemeinsames Passwort einzukompilieren: es steht nie im Repo, nie in der Binary,
 nie im Build-Log, und laesst sich einzeln zurueckziehen.
+
+## Der pre_pro-Ordner: Streaming und Mirror
+
+Der Sync-Agent kommt mit beiden Betriebsarten von Google Drive für Desktop
+zurecht.
+
+Im **Mirror-Modus** liegen die Dateien wirklich auf der Platte, der
+Dateisystem-Watcher meldet jede neue Datei sofort.
+
+Im **Streaming-Modus** ist das Laufwerk virtuell und Dateien werden erst beim
+Zugriff geladen. Ob dabei ein Dateisystem-Ereignis ankommt, ist nicht
+verlässlich — deshalb sieht der Agent den Ordner zusätzlich alle fünf Minuten
+von sich aus durch (`RESCAN_INTERVAL` in `src-tauri/src/sync.rs`). Neue Songs
+kommen dadurch bis zu fünf Minuten später an als im Mirror-Modus, aber sie
+kommen an.
+
+Weil im Streaming-Modus jeder Lesevorgang echten Netzverkehr bedeutet, liest
+der Agent jede Datei nur **einmal** und hasht aus demselben Puffer, aus dem er
+auch hochlädt. Bekannte Dateien erkennt er vorher am lokalen Index, ohne sie
+überhaupt anzufassen.

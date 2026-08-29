@@ -45,13 +45,21 @@ fn get_settings(state: tauri::State<Arc<SyncState>>) -> SettingsView {
 fn save_settings(
     app: AppHandle,
     state: tauri::State<Arc<SyncState>>,
-    api_base_url: String,
+    api_base_url: Option<String>,
     device_token: Option<String>,
     pre_pro_path: String,
 ) -> Result<(), String> {
     {
         let mut settings = state.settings.lock().map_err(|e| e.to_string())?;
-        settings.api_base_url = api_base_url.trim().trim_end_matches('/').to_string();
+        // Leer gelassen heisst "die uebliche Adresse" - so muss beim ersten
+        // Start niemand eine URL abtippen.
+        let url = api_base_url.unwrap_or_default();
+        let url = url.trim().trim_end_matches('/');
+        settings.api_base_url = if url.is_empty() {
+            settings::DEFAULT_API_BASE_URL.to_string()
+        } else {
+            url.to_string()
+        };
         settings.pre_pro_path = pre_pro_path.trim().to_string();
         // Ein leeres Feld bedeutet "unveraendert lassen", nicht "loeschen" -
         // sonst wirft ein Speichern der Ordnereinstellung das Token weg.

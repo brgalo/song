@@ -724,11 +724,6 @@ window.addEventListener("DOMContentLoaded", async () => {
           Das Gerätetoken holst du dir einmalig im Browser. Es wird lokal
           gespeichert und verlässt diesen Rechner nicht.
         </p>
-        <label style="display:block;font-size:.72rem;color:var(--text-dim);margin-bottom:4px">API-Adresse</label>
-        <input type="text" id="setup-url" class="reply-input" style="max-width:100%"
-               placeholder="https://songou-api.<name>.workers.dev"
-               value="${settings.apiBaseUrl || ''}">
-
         <div style="margin:12px 0 4px">
           <button class="transport-btn" id="setup-pair">Token holen</button>
         </div>
@@ -747,13 +742,26 @@ window.addEventListener("DOMContentLoaded", async () => {
           <button class="transport-btn" id="setup-save">Speichern</button>
           <span id="setup-status" style="margin-left:10px;font-size:.75rem;color:var(--text-dim)"></span>
         </div>
+
+        <!-- Die Adresse ist für alle in der Band dieselbe und steht in der App.
+             Nur sichtbar, wenn jemand sie wirklich ändern will. -->
+        <details style="margin-top:18px">
+          <summary style="font-size:.72rem;color:var(--text-dimmer);cursor:pointer">Server-Adresse ändern</summary>
+          <input type="text" id="setup-url" class="reply-input" style="max-width:100%;margin-top:8px"
+                 value="${settings.apiBaseUrl || ''}">
+          <p style="font-size:.7rem;color:var(--text-dimmer);margin-top:6px">
+            Leer lassen setzt auf die Voreinstellung zurück.
+          </p>
+        </details>
       </div>`;
 
+    // Die Kopplungsseite liegt auf dem auth-Worker, nicht auf der API.
+    const pairUrlFor = (base) =>
+      (base || '').trim().replace(/\/+$/, '').replace('songou-api', 'songou-auth') + '/pair';
+
     document.getElementById('setup-pair').addEventListener('click', () => {
-      const base = document.getElementById('setup-url').value.trim();
-      // Die Kopplungsseite liegt auf dem auth-Worker, nicht auf der API.
-      const pairUrl = base.replace('songou-api', 'songou-auth') + '/pair';
-      invoke('open_pair_page', { url: pairUrl }).catch((err) => alert(err));
+      invoke('open_pair_page', { url: pairUrlFor(document.getElementById('setup-url').value) })
+        .catch((err) => alert(err));
     });
 
     document.getElementById('setup-browse').addEventListener('click', async () => {
@@ -766,7 +774,8 @@ window.addEventListener("DOMContentLoaded", async () => {
       status.textContent = 'Speichere…';
       try {
         await invoke('save_settings', {
-          apiBaseUrl: document.getElementById('setup-url').value.trim(),
+          // Leer heißt "die übliche Adresse" — Rust setzt dann die Voreinstellung.
+          apiBaseUrl: document.getElementById('setup-url').value.trim() || null,
           deviceToken: document.getElementById('setup-token').value.trim() || null,
           preProPath: document.getElementById('setup-folder').value.trim(),
         });
