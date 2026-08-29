@@ -5,6 +5,7 @@
 name = "songou-api"
 main = "src/api.js"
 compatibility_date = "2026-08-01"
+account_id = "7555eb74d6f1b1518dc5b4e7c15c4503"
 
 [[d1_databases]]
 binding = "DB"
