@@ -1,0 +1,5 @@
+-- Testgeraet fuer den lokalen Smoke-Test.
+-- token_hash ist SHA-256 von 'test-device-token'.
+INSERT OR REPLACE INTO devices (token_hash, identity, label, created_at) VALUES
+  ('fdc2f4194f79710d879d596f606d94f5e85f07f53b42d2b13f2e9aeb74d78c39',
+   'martin@example.com', 'Testrechner', '2026-01-01T00:00:00.000Z');

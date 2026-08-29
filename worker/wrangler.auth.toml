@@ -1,0 +1,16 @@
+# songou-auth — nur die Kopplungsseite.
+# Auf DIESEN Worker gehört Cloudflare Access (One-Click im Dashboard).
+# Er sieht ausschliesslich Browser-Traffic, deshalb funktioniert der
+# Login-Redirect hier problemlos.
+name = "songou-auth"
+main = "src/auth-app.js"
+compatibility_date = "2026-08-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "songou"
+database_id = "HIER_DATABASE_ID_EINTRAGEN"
+
+[vars]
+ACCESS_TEAM_DOMAIN = "DEINTEAM.cloudflareaccess.com"
+ACCESS_AUD = "HIER_AUD_TAG_EINTRAGEN"

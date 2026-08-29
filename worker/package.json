@@ -1,0 +1,19 @@
+{
+  "name": "songou-worker",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev --config wrangler.toml",
+    "dev:auth": "wrangler dev --config wrangler.auth.toml --port 8788",
+    "deploy": "wrangler deploy --config wrangler.toml",
+    "deploy:auth": "wrangler deploy --config wrangler.auth.toml",
+    "db:init:local": "wrangler d1 execute songou --config wrangler.toml --local --file migrations/0001_init.sql",
+    "db:init": "wrangler d1 execute songou --config wrangler.toml --remote --file migrations/0001_init.sql",
+    "test": "node test/smoke.mjs",
+    "db:seed:local": "wrangler d1 execute songou --config wrangler.toml --local --file test/seed.sql"
+  },
+  "devDependencies": {
+    "wrangler": "^4.42.0"
+  }
+}

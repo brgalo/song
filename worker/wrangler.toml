@@ -1,0 +1,22 @@
+# songou-api — die eigentliche API.
+# WICHTIG: Auf diesem Worker darf KEIN Cloudflare Access liegen. Er prüft selbst
+# (Access-JWT ODER Device-Token) und muss Bearer-Requests der Desktop-App
+# durchlassen, statt sie in einen Login-Redirect zu schicken.
+name = "songou-api"
+main = "src/api.js"
+compatibility_date = "2026-08-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "songou"
+database_id = "HIER_DATABASE_ID_EINTRAGEN"
+
+[[r2_buckets]]
+binding = "BUCKET"
+bucket_name = "songou-audio"
+
+[vars]
+# Aus dem Zero-Trust-Dashboard: Settings → Custom Pages → Team domain
+ACCESS_TEAM_DOMAIN = "DEINTEAM.cloudflareaccess.com"
+# Application Audience (AUD) Tag der Access-Anwendung vor songou-auth
+ACCESS_AUD = "HIER_AUD_TAG_EINTRAGEN"
