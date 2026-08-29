@@ -20,4 +20,4 @@ bucket_name = "songou-audio"
 # Aus dem Zero-Trust-Dashboard: Settings → Custom Pages → Team domain
 ACCESS_TEAM_DOMAIN = "blue-frog-d37c.cloudflareaccess.com"
 # Application Audience (AUD) Tag der Access-Anwendung vor songou-auth
-ACCESS_AUD = "HIER_AUD_TAG_EINTRAGEN"
+ACCESS_AUD = "99f92be9fffbcfeaef8eccbbdbd132244c2cdd8ba6206a31715476aae22b494d"

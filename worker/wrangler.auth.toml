@@ -14,4 +14,4 @@ database_id = "69f9807b-6066-46dd-b162-7ae23671229a"
 
 [vars]
 ACCESS_TEAM_DOMAIN = "blue-frog-d37c.cloudflareaccess.com"
-ACCESS_AUD = "HIER_AUD_TAG_EINTRAGEN"
+ACCESS_AUD = "99f92be9fffbcfeaef8eccbbdbd132244c2cdd8ba6206a31715476aae22b494d"
