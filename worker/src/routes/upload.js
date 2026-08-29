@@ -8,8 +8,9 @@
 // fuenf Agents, sollen nicht fuenf denselben Song hochladen. Wer zuerst
 // prepare aufruft, laedt hoch; alle anderen bekommen known:true und hoeren auf.
 
-import { json, readJson, badRequest, notFound, tooLarge, nowIso } from '../lib/http.js';
+import { json, readJson, badRequest, notFound, tooLarge, HttpError, nowIso } from '../lib/http.js';
 import { ulid } from '../lib/ulid.js';
+import { storageLimitBytes, usedBytes } from '../lib/storage.js';
 
 // Workers nehmen im Free-Plan maximal 100 MB Request-Body an. VBR0-MP3s liegen
 // bei ~7 MB, das ist also reichlich Luft. Wir bremsen frueher, damit ein
@@ -53,6 +54,14 @@ export async function prepare({ request, env, identity }) {
   // Ein abgebrochener Upload hinterlaesst eine Zeile mit ready = 0. Die wird
   // wiederverwendet, statt eine zweite anzulegen - sha256 ist UNIQUE.
   if (known) return json({ known: false, versionId: known.id, uploadPath: `/api/upload/blob/${known.id}` });
+
+  // Speicherbremse: hier und nicht im Agent, damit sie auch fuer einen
+  // veralteten oder fehlerhaften Client gilt.
+  const [used, limit] = await Promise.all([usedBytes(env), storageLimitBytes(env)]);
+  if (used + bytes > limit) {
+    throw new HttpError(507, 'storage_limit',
+      `Speicherlimit erreicht: ${used} von ${limit} Bytes belegt, die Datei braucht ${bytes} weitere`);
+  }
 
   const songId = await ensureSong(env, songName, ts);
   const versionId = ulid();

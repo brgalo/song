@@ -98,3 +98,40 @@ R2-S3-Zugangsdaten, `aws4fetch` und eine CORS-Konfiguration am Bucket.
 statt sie am Plattformlimit auflaufen zu lassen. Sollten doch einmal lange WAVs
 noetig werden, ist der Wechsel klein: nur `uploadBlob` in `src/routes/upload.js`
 muss dann eine signierte URL zurueckgeben statt die Bytes selbst anzunehmen.
+
+## Kosten und Geheimnisse
+
+**Cloudflare kennt keine harte Ausgabengrenze.** Budget-Alerts sind rein
+informativ und werten die Nutzung erst am Folgetag aus. Der Schutz kommt
+deshalb aus dem Aufbau selbst:
+
+- Workers und D1 laufen im Free-Plan und **stoppen hart**, statt abzurechnen.
+- Der R2-Bucket ist **nicht oeffentlich**. Jeder Zugriff geht durch den Worker
+  und braucht ein Token, also deckelt das Workers-Limit indirekt auch die
+  R2-Operationen. Von aussen laesst sich die Rechnung nicht hochtreiben.
+  **Niemals einen oeffentlichen Bucket oder eine Custom Domain darauf aktivieren** —
+  das waere der eine Handgriff, der diesen Schutz aushebelt.
+- Die einzige unbegrenzte Achse ist der Speicherplatz. Deshalb bremst
+  `upload/prepare` bei 8 GiB (`src/lib/storage.js`, aenderbar ueber die
+  Einstellung `storage_limit_bytes` ohne Deploy). Bewusst serverseitig: ein
+  veralteter Agent soll die Grenze nicht umgehen koennen.
+
+### Was ist ein Geheimnis und was nicht
+
+| Wert | Einstufung | Wohin |
+|---|---|---|
+| `database_id`, `ACCESS_AUD`, `ACCESS_TEAM_DOMAIN` | Kennungen | duerfen ins oeffentliche Repo |
+| `apiBaseUrl` | oeffentliche URL | darf in die Desktop-Binary |
+| **Cloudflare API-Token** | **Geheimnis** | nur GitHub Secret `CLOUDFLARE_API_TOKEN` |
+| **Geraetetoken** | **Geheimnis, pro Person** | zur Laufzeit ueber `/pair`, nur in `%APPDATA%` |
+
+Cloudflare sagt das fuer die erste Zeile selbst so: Namespace-IDs, Account-IDs
+und Bucket-Namen duerfen in einer oeffentlichen Konfiguration stehen. Wer sie
+kennt, kann ohne gueltiges Token nichts damit anfangen.
+
+**Alles, was in eine ausgelieferte Binary kompiliert wird, laesst sich daraus
+extrahieren** — auch Werte, die ueber GitHub Secrets beim Build hineingereicht
+wurden. GitHub-Secrets schuetzen den Build-Vorgang, nicht das Ergebnis. Genau
+deshalb holt sich jeder sein Geraetetoken zur Laufzeit ueber `/pair`, statt ein
+gemeinsames Passwort einzukompilieren: es steht nie im Repo, nie in der Binary,
+nie im Build-Log, und laesst sich einzeln zurueckziehen.

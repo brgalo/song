@@ -2,6 +2,7 @@
 // Clients an Audio und Peaks kommen.
 
 import { json, notFound, badRequest } from '../lib/http.js';
+import { storageLimitBytes } from '../lib/storage.js';
 
 async function readSettings(env) {
   const { results } = await env.DB.prepare('SELECT key, value FROM settings').all();
@@ -98,6 +99,20 @@ export async function peaks({ env, params }) {
       'cache-control': 'private, max-age=31536000, immutable',
     },
   });
+}
+
+/**
+ * Belegter Speicher gegen das Limit. Der Sync-Agent zeigt das im Tray an;
+ * durchgesetzt wird das Limit aber serverseitig in upload/prepare, damit es
+ * auch dann greift, wenn ein Agent aelter oder kaputt ist.
+ */
+export async function usage({ env }) {
+  const [row, limit] = await Promise.all([
+    env.DB.prepare('SELECT COALESCE(SUM(bytes), 0) AS total FROM versions WHERE deleted_at IS NULL').first(),
+    storageLimitBytes(env),
+  ]);
+  const bytes = Number(row?.total ?? 0);
+  return json({ bytes, limitBytes: limit, remainingBytes: Math.max(0, limit - bytes) });
 }
 
 /**

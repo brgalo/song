@@ -215,6 +215,32 @@ const feed = await call('GET', '/api/feed?since=1970-01-01T00:00:00.000Z');
 check('Feed meldet die neue Version', feed.json?.versions?.some((v) => v.song_name === songName));
 check('Feed ab jetzt leer', (await call('GET', '/api/feed?since=2099-01-01T00:00:00.000Z')).json?.versions?.length === 0);
 
+console.log('== Speicherbremse ==');
+// Cloudflare kennt keine harte Ausgabengrenze, deshalb bremst der Server
+// selbst. Absichtlich hier und nicht im Agent: ein veralteter Client soll
+// die Grenze nicht umgehen koennen.
+const usage = await call('GET', '/api/usage');
+check('Nutzung wird gemeldet', Number.isFinite(usage.json?.bytes) && usage.json.bytes > 0,
+  JSON.stringify(usage.json));
+check('Limit und Rest werden gemeldet',
+  usage.json?.limitBytes > 0 && usage.json?.remainingBytes >= 0);
+check('Testlauf nutzt das kleine Limit aus seed.sql', usage.json?.limitBytes === 52428800,
+  `limitBytes=${usage.json?.limitBytes} - laeuft der Test gegen eine frisch geseedete lokale DB?`);
+
+// 60 MiB: ueber dem Testlimit von 50 MiB, aber unter der Datei-Obergrenze von
+// 90 MB - sonst wuerde zuerst die falsche Pruefung greifen.
+const overLimit = await call('POST', '/api/upload/prepare', {
+  sha256: 'f'.repeat(64), filename: 'riesig.mp3', songName: 'Riesig',
+  bytes: 60 * 1024 * 1024,
+});
+check('Upload ueber dem Limit -> 507', overLimit.status === 507, JSON.stringify(overLimit.json));
+check('Fehler nennt den Grund', overLimit.json?.error === 'storage_limit');
+
+const justUnder = await call('POST', '/api/upload/prepare', {
+  sha256: 'e'.repeat(64), filename: 'passt.mp3', songName: 'Passt', bytes: 1024,
+});
+check('Upload unter dem Limit geht durch', justUnder.status === 200 && justUnder.json?.known === false);
+
 console.log('== Router ==');
 check('unbekannte Route -> 404', (await call('GET', '/api/gibtsnicht')).status === 404);
 check('falsche Methode -> 405', (await call('DELETE', '/api/bootstrap')).status === 405);

@@ -33,6 +33,7 @@ function guarded(handler) {
 const router = new Router()
   .get('/api/bootstrap', guarded(library.bootstrap))
   .get('/api/feed', guarded(library.feed))
+  .get('/api/usage', guarded(library.usage))
 
   .post('/api/upload/prepare', guarded(upload.prepare))
   .put('/api/upload/blob/:versionId', guarded(upload.uploadBlob))
