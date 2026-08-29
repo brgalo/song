@@ -50,3 +50,17 @@ jobs:
           prerelease: false
           # WICHTIG: Das ist der magische Befehl für Intel + Apple Silicon Macs
           args: --target universal-apple-darwin
+
+      # Unabhängig vom Release: die gebauten Dateien hängen auch an der
+      # Run-Seite. Damit lässt sich ein Zwischenstand ausprobieren, ohne dafür
+      # gleich eine Version zu vergeben.
+      - name: Builds an den Run hängen
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: songou-macos
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            src-tauri/target/universal-apple-darwin/release/bundle/**/*.dmg
+            src-tauri/target/universal-apple-darwin/release/bundle/**/*.app.tar.gz

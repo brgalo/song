@@ -49,13 +49,35 @@ jobs:
       - name: JavaScript Abhängigkeiten installieren
         run: npm install
 
+      # Der Tag kommt aus der "version" in src-tauri/tauri.conf.json. Wer ein
+      # neues Release will, hebt dort die Version an - ein von Hand angelegtes
+      # Release mit anderem Tag bleibt sonst leer, weil hier weiterhin auf den
+      # alten Tag hochgeladen wird.
       - name: Tauri Build & Release
+        id: tauri
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tagName: app-v__VERSION__ 
+          tagName: app-v__VERSION__
           releaseName: 'BandTool v__VERSION__'
           releaseBody: 'Automatischer Build für Windows (.exe) und Linux (.deb / .AppImage).'
           releaseDraft: true
           prerelease: false
+
+      # Unabhängig vom Release: die gebauten Dateien hängen auch an der
+      # Run-Seite. Damit lässt sich ein Zwischenstand ausprobieren, ohne dafür
+      # gleich eine Version zu vergeben.
+      - name: Builds an den Run hängen
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: songou-${{ matrix.platform }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            src-tauri/target/release/bundle/**/*.exe
+            src-tauri/target/release/bundle/**/*.msi
+            src-tauri/target/release/bundle/**/*.deb
+            src-tauri/target/release/bundle/**/*.AppImage
+            src-tauri/target/release/bundle/**/*.rpm
