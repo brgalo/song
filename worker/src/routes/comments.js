@@ -69,6 +69,15 @@ async function decorate(env, rows) {
   }));
 }
 
+/**
+ * Geloescht heisst geloescht: Text, Tags und Reaktionen einer entfernten
+ * Zeile verlassen den Server nicht. Uebrig bleibt die Huelle mit deleted_at,
+ * an der die Oberflaeche den Platzhalter erkennt.
+ */
+function stripDeleted(comments) {
+  return comments.map((c) => (c.deleted_at ? { ...c, text: '', tags: [], reactions: {} } : c));
+}
+
 export async function list({ env, url }) {
   const songId = url.searchParams.get('songId');
   const since = url.searchParams.get('since');
@@ -76,11 +85,20 @@ export async function list({ env, url }) {
 
   // Mit since kommen auch Tombstones mit, damit ein Client geloeschte
   // Kommentare entfernen kann statt sie ewig anzuzeigen.
+  //
+  // Ohne since bleiben geloeschte Kommentare grundsaetzlich draussen - mit
+  // einer Ausnahme: haengt noch eine lebende Antwort daran, wird die Huelle
+  // mitgeliefert. Sonst verschwaende ein geloeschter Root-Kommentar die
+  // ganze Diskussion darunter, statt einen Platzhalter zu hinterlassen.
   const conditions = [];
   const binds = [];
   if (songId) { binds.push(songId); conditions.push(`song_id = ?${binds.length}`); }
   if (since) { binds.push(since); conditions.push(`updated_at > ?${binds.length}`); }
-  else conditions.push('deleted_at IS NULL');
+  else {
+    conditions.push(`(deleted_at IS NULL OR EXISTS (
+        SELECT 1 FROM comments AS reply
+         WHERE reply.parent_id = comments.id AND reply.deleted_at IS NULL))`);
+  }
 
   const { results } = await env.DB.prepare(
     `SELECT id, song_id, version_id, parent_id, anchor_type, start_s, end_s,
@@ -90,7 +108,7 @@ export async function list({ env, url }) {
       ORDER BY updated_at`,
   ).bind(...binds).all();
 
-  return json({ comments: await decorate(env, results), now: nowIso() });
+  return json({ comments: stripDeleted(await decorate(env, results)), now: nowIso() });
 }
 
 export async function create({ request, env, identity }) {

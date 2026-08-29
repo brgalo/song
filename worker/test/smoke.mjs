@@ -155,12 +155,50 @@ check('Text aendern',
 check('loeschen', (await call('DELETE', `/api/comments/${rootId}`)).json?.ok === true);
 
 const normal = await call('GET', `/api/comments?songId=${songId}`);
-check('geloeschter Kommentar ist aus der Normalabfrage raus',
-  !normal.json.comments.some((c) => c.id === rootId));
+// rootId traegt eine Antwort, bleibt also absichtlich als Huelle stehen -
+// der ausfuehrliche Nachweis dafuer steht weiter unten.
+const normalRoot = normal.json.comments.find((c) => c.id === rootId);
+check('geloeschter Kommentar behaelt keinen Text in der Normalabfrage',
+  normalRoot !== undefined && normalRoot.text === '', JSON.stringify(normalRoot));
 const sync = await call('GET', `/api/comments?songId=${songId}&since=1970-01-01T00:00:00.000Z`);
 const tombstone = sync.json.comments.find((c) => c.id === rootId);
 check('Sync-Abfrage liefert den Tombstone mit', !!tombstone?.deleted_at,
   'ohne ihn wuerde ein Offline-Client den Kommentar spaeter wieder auferstehen lassen');
+
+console.log('== Geloeschter Thread mit Antwort ==');
+// Beschlossen: ein geloeschter Root-Kommentar hinterlaesst einen Platzhalter,
+// seine Antworten bleiben lesbar. Vorher fiel der Root aus der Normalabfrage
+// und nahm die ganze Diskussion mit.
+const threadRoot = testId();
+const threadReply = testId();
+await call('POST', '/api/comments',
+  { id: threadRoot, songId, versionId, anchorType: 'point', startS: 90, text: 'Bridge klingt komisch', tags: ['arrangement'] });
+await call('POST', '/api/comments',
+  { id: threadReply, songId, parentId: threadRoot, anchorType: 'none', text: 'finde ich auch' });
+await call('PUT', `/api/reactions/${threadRoot}/${encodeURIComponent('👍')}`);
+await call('DELETE', `/api/comments/${threadRoot}`);
+
+const thread = (await call('GET', `/api/comments?songId=${songId}`)).json.comments;
+const husk = thread.find((c) => c.id === threadRoot);
+const survivor = thread.find((c) => c.id === threadReply);
+
+check('geloeschter Root bleibt als Huelle in der Liste', !!husk,
+  'ohne ihn verliert der Client die Verankerung der Antwort');
+check('Huelle ist als geloescht markiert', !!husk?.deleted_at);
+check('Text der geloeschten Zeile verlaesst den Server nicht', husk?.text === '',
+  JSON.stringify(husk?.text));
+check('Tags und Reaktionen der geloeschten Zeile ebenfalls nicht',
+  JSON.stringify(husk?.tags) === '[]' && JSON.stringify(husk?.reactions) === '{}',
+  JSON.stringify({ tags: husk?.tags, reactions: husk?.reactions }));
+check('die Antwort bleibt unveraendert lesbar', survivor?.text === 'finde ich auch');
+
+// Gegenprobe: ohne Antwort daran verschwindet ein geloeschter Kommentar ganz.
+const lonely = testId();
+await call('POST', '/api/comments', { id: lonely, songId, anchorType: 'none', text: 'Tippfehler' });
+await call('DELETE', `/api/comments/${lonely}`);
+const afterLonely = (await call('GET', `/api/comments?songId=${songId}`)).json.comments;
+check('geloeschter Kommentar OHNE Antworten verschwindet ganz',
+  !afterLonely.some((c) => c.id === lonely));
 
 console.log('== Abschnitte ==');
 const sectionId = testId();
