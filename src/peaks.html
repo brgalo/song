@@ -1,0 +1,16 @@
+<!DOCTYPE html>
+<html lang="de">
+  <head>
+    <meta charset="UTF-8" />
+    <title>songou — Wellenform</title>
+  </head>
+  <body>
+    <!--
+      Unsichtbares Arbeitsfenster. Es rechnet nur Wellenform-Peaks aus und
+      zeigt nie etwas an. Bewusst getrennt vom Hauptfenster: dort laeuft die
+      WaveSurfer-Instanz der Oberflaeche, und zwei gleichzeitige Dekodierungen
+      im selben AudioContext kommen sich in die Quere.
+    -->
+    <script type="module" src="/peaks.js"></script>
+  </body>
+</html>

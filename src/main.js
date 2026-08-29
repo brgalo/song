@@ -1,7 +1,9 @@
 import WaveSurfer from 'https://unpkg.com/wavesurfer.js@7/dist/wavesurfer.esm.js';
 import RegionsPlugin from 'https://unpkg.com/wavesurfer.js@7/dist/plugins/regions.esm.js';
+import * as api from './api.js';
 
 const invoke = window.__TAURI__.core.invoke;
+const listen = window.__TAURI__.event.listen;
 
 window.addEventListener("DOMContentLoaded", async () => {
   const outputDiv = document.getElementById("app");
@@ -10,7 +12,8 @@ window.addEventListener("DOMContentLoaded", async () => {
   const folderList = document.getElementById("folder-list");
 
   let currentConfig = { band_name: "Unbekannte Band", current_user: "Gast", members: {} };
-  let currentFolderPath = "";
+  let currentSongId = "";
+  let currentVersionId = "";
   let currentVersionName = "";
   let allFolderComments = [];
 
@@ -117,120 +120,125 @@ window.addEventListener("DOMContentLoaded", async () => {
   }
 
   // --- HTML-Generierung ---
+  function escapeHtml(value) {
+    return String(value ?? '').replace(/[&<>"']/g, (c) =>
+      ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+
+  /** Zeitangabe je nach Verankerung. */
+  function anchorBadge(comment) {
+    if (comment.anchorType === 'point') {
+      return `<span class="time-badge">📍 ${formatSeconds(comment.start)}</span>`;
+    }
+    if (comment.anchorType === 'range') {
+      return `<span class="time-badge">${formatSeconds(comment.start)} – ${formatSeconds(comment.end)}</span>`;
+    }
+    return `<span class="time-badge">🎵 ganzer Song</span>`;
+  }
+
   function generateCommentHTML(comment, depth = 0, rootId = null) {
     const color = memberColor(comment.author);
     const isRoot = depth === 0;
     const currentRootId = isRoot ? comment.id : rootId;
     const timeStr = formatTime(comment.timestamp);
-    const reactionCounts = isRoot ? getReactionCounts(comment) : null;
+    const isMine = comment.author === currentConfig.current_user;
 
-    // Reactions HTML (nur auf Root-Kommentaren)
-    let reactionsHTML = '';
-    if (isRoot) {
-      const pickerBtns = REACTIONS.map(emoji => {
-        const count = reactionCounts[emoji];
-        const active = hasUserReacted(comment, emoji);
-        return `<button class="reaction-btn ${active ? 'reacted' : ''}" 
-          onclick="toggleReaction('${comment.id}', '${emoji}')" 
-          title="${emoji}">
-          ${emoji}${count > 0 ? `<span class="reaction-count">${count}</span>` : ''}
-        </button>`;
-      }).join('');
-      reactionsHTML = `<div class="reactions-row">${pickerBtns}</div>`;
+    // Geloeschte Kommentare bleiben als Huelle stehen, solange Antworten daran
+    // haengen - sonst verschwaende die Diskussion darunter. Der Server liefert
+    // Text, Tags und Reaktionen dafuer gar nicht erst aus.
+    if (comment.deleted) {
+      return `
+        <div id="comment-box-${comment.id}" class="${isRoot ? 'comment-box' : 'reply-box'}"
+             style="border-left: ${isRoot ? '4px' : '2px'} solid var(--text-dimmer); opacity:.65;">
+          <div class="comment-text" style="font-style:italic;color:var(--text-dimmer)">Kommentar gelöscht</div>
+          ${(comment.replies?.length > 0) ? comment.replies.map(r => generateCommentHTML(r, depth + 1, currentRootId)).join('') : ''}
+        </div>`;
     }
 
-    let html = `
-      <div id="comment-box-${comment.id}" 
-           class="${isRoot ? 'comment-box' : 'reply-box'}" 
+    // Reaktionen nur auf Root-Kommentaren anzeigen.
+    let reactionsHTML = '';
+    if (isRoot) {
+      const counts = getReactionCounts(comment);
+      reactionsHTML = `<div class="reactions-row">${REACTIONS.map(emoji => {
+        const count = counts[emoji];
+        const active = hasUserReacted(comment, emoji);
+        return `<button class="reaction-btn ${active ? 'reacted' : ''}"
+          onclick="toggleReaction('${comment.id}', '${emoji}')" title="${emoji}">
+          ${emoji}${count > 0 ? `<span class="reaction-count">${count}</span>` : ''}
+        </button>`;
+      }).join('')}</div>`;
+    }
+
+    // Bearbeiten und Löschen nur für eigene Kommentare - die API weist fremde
+    // Änderungen ohnehin ab, aber die Knöpfe gar nicht erst anzubieten ist
+    // ehrlicher als eine Fehlermeldung hinterher.
+    const actions = `<div class="comment-actions">
+        ${comment.anchorType !== 'none' ? `<button class="icon-btn" onclick="seekToRegion('${comment.id}')" title="Zur Stelle springen">⏮</button>` : ''}
+        ${isMine ? `<button class="icon-btn" onclick="editComment('${comment.id}')" title="Bearbeiten">✏️</button>` : ''}
+        ${isMine ? `<button class="icon-btn" onclick="removeComment('${comment.id}')" title="Löschen">🗑</button>` : ''}
+      </div>`;
+
+    const tagsHTML = comment.tags?.length
+      ? `<div class="reactions-row">${comment.tags.map(t =>
+          `<span class="time-badge">#${escapeHtml(t)}</span>`).join('')}</div>`
+      : '';
+
+    return `
+      <div id="comment-box-${comment.id}"
+           class="${isRoot ? 'comment-box' : 'reply-box'}"
            style="border-left: ${isRoot ? '4px' : '2px'} solid ${color};"
            onmouseenter="highlightRegion('${currentRootId}')"
            onmouseleave="unhighlightRegion('${currentRootId}')">
         <div style="position: relative;">
-          ${isRoot ? `<div class="comment-actions">
-            <button class="icon-btn" onclick="seekToRegion('${comment.id}')" title="Zur Stelle springen">⏮</button>
-            <button class="icon-btn" onclick="editComment('${comment.id}')" title="Bearbeiten">✏️</button>
-          </div>` : ''}
-          <strong style="color: ${color}">${comment.author}</strong>
-          ${isRoot ? `<span class="time-badge">${formatSeconds(comment.start)} – ${formatSeconds(comment.end)}</span>` : ''}
+          ${actions}
+          <strong style="color: ${color}">${escapeHtml(comment.author)}</strong>
+          ${isRoot ? anchorBadge(comment) : ''}
           <span class="timestamp-label">${timeStr}</span>
-          <div class="comment-text">${comment.text}</div>
+          <div class="comment-text">${escapeHtml(comment.text)}</div>
         </div>
+        ${tagsHTML}
         ${reactionsHTML}
         ${(comment.replies?.length > 0) ? comment.replies.map(r => generateCommentHTML(r, depth + 1, currentRootId)).join('') : ''}
         <div class="reply-row">
-          <input type="text" id="reply-input-${comment.id}" 
+          <input type="text" id="reply-input-${comment.id}"
                  placeholder="Antworten… (Enter)"
                  class="reply-input"
                  onkeydown="checkReplyEnter(event, '${comment.id}')">
         </div>
       </div>`;
-    return html;
   }
 
-  // --- CONFIG + LOKALER USER ---
-  try {
-    const configString = await invoke("read_config");
-    currentConfig = { ...currentConfig, ...JSON.parse(configString) };
-  } catch {
-    // config.json fehlt – Gast-Modus, members bleibt leer
+  // --- EINRICHTUNG UND KONFIGURATION ---
+  // Beides kommt jetzt aus der API. Der Benutzername insbesondere: er ist die
+  // von Cloudflare Access verifizierte Identitaet, nicht mehr frei waehlbar.
+  let songs = [];
+
+  async function loadBootstrap() {
+    const data = await api.getBootstrap();
+    currentConfig.band_name = data.bandName;
+    currentConfig.members = data.members || {};
+    currentConfig.current_user = data.identity;
+    songs = data.songs || [];
+    return data;
   }
 
-  // Lokal gespeicherten Usernamen laden (überschreibt config.current_user)
-  try {
-    const localUser = await invoke("read_local_user");
-    if (localUser && localUser.trim()) {
-      currentConfig.current_user = localUser.trim();
-    }
-  } catch {}
-
-  // Header rendern (mit klickbarem Namen)
+  // Header rendern. Das frühere "Du bist:"-Dropdown ist weg: die Identität
+  // kommt verifiziert aus dem Token, niemand kann mehr in fremdem Namen
+  // kommentieren.
   function renderHeader() {
-    // members kann Objekt {Name: Farbe} oder Array sein – beides abfangen
-    const rawMembers = currentConfig.members || {};
-    const members = Array.isArray(rawMembers)
-      ? rawMembers  // altes Format: string-array
-      : Object.keys(rawMembers);  // neues Format: {name: color}
-
-    const memberOptions = members.length > 0
-      ? members.map(m => `<option value="${m}" ${m === currentConfig.current_user ? 'selected' : ''}>${m}</option>`).join('')
-      : `<option value="${currentConfig.current_user}">${currentConfig.current_user}</option>`;
+    const escape = (value) => String(value).replace(/[&<>"']/g, (c) =>
+      ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
     outputDiv.innerHTML = `
       <div class="band-header">
-        <h2 class="band-title">${currentConfig.band_name}</h2>
+        <h2 class="band-title">${escape(currentConfig.band_name)}</h2>
         <div class="user-select-wrap">
           <span class="user-prefix">● Du bist:</span>
-          <select id="user-select" class="user-select">
-            ${memberOptions}
-            <option value="__custom__">Anderer Name…</option>
-          </select>
+          <span class="user-select" style="color:${memberColor(currentConfig.current_user)}">${escape(currentConfig.current_user)}</span>
         </div>
       </div>`;
-
-    document.getElementById('user-select').addEventListener('change', async (e) => {
-      if (e.target.value === '__custom__') {
-        const name = prompt('Dein Name:', currentConfig.current_user);
-        if (name && name.trim()) {
-          currentConfig.current_user = name.trim();
-        }
-        // Dropdown neu rendern damit "__custom__" nicht selected bleibt
-        renderHeader();
-        return; // save passiert rekursiv nach renderHeader via neuem Listener
-      }
-      // Name direkt setzen und sofort speichern
-      currentConfig.current_user = e.target.value;
-      try {
-        await invoke("save_local_user", { username: currentConfig.current_user });
-        console.log("User gespeichert:", currentConfig.current_user);
-      } catch(err) {
-        console.error("Fehler beim Speichern des Users:", err);
-      }
-    });
   }
-  renderHeader();
-  // Nach renderHeader den gespeicherten User einmalig speichern damit er beim
-  // nächsten Start gleich vorausgewählt ist
-  invoke("save_local_user", { username: currentConfig.current_user }).catch(() => {});
+
 
   // --- WAVESURFER ---
   const wsRegions = RegionsPlugin.create();
@@ -356,7 +364,10 @@ window.addEventListener("DOMContentLoaded", async () => {
       return;
     }
 
-    const commentId = Date.now().toString();
+    // ULID statt Date.now(): zwei Leute in derselben Millisekunde erzeugten
+    // frueher dieselbe ID. Ausserdem macht die vom Client vergebene ID den
+    // POST idempotent.
+    const commentId = api.ulid();
     activeRegion.id = commentId;
     activeRegion.setOptions({
       drag: false,
@@ -382,31 +393,51 @@ window.addEventListener("DOMContentLoaded", async () => {
       replies: []
     };
 
-    allFolderComments.push(newComment);
     activeRegion = null;
     input.value = "";
 
-    await saveToServer();
+    try {
+      await api.createComment({
+        id: commentId,
+        songId: currentSongId,
+        versionId: currentVersionId,
+        anchorType: "range",
+        startS: newComment.start,
+        endS: newComment.end,
+        text,
+      });
+    } catch (err) {
+      console.error("Kommentar konnte nicht gespeichert werden:", err);
+      alert("Kommentar konnte nicht gespeichert werden: " + err);
+    }
+    await reloadComments();
     renderComments();
   });
 
   // --- AUDIO LADEN ---
-  async function loadAudioFromDisk(filePath, versionName) {
+  // Liegt die Datei lokal im Drive-Ordner, gewinnt die Platte: kein Download,
+  // sofort da, und es funktioniert auch ohne Netz. Erst wenn sie fehlt (anderer
+  // Rechner, kein Drive-Sync), kommt sie aus R2.
+  async function loadVersion(song, version) {
     try {
-      // Loading-State: Titel + Waveform-Overlay + Kommentare ausblenden
-      currentSongTitle.textContent = "⏳ Lade: " + versionName + "…";
+      currentSongTitle.textContent = "⏳ Lade: " + version.filename + "…";
       document.getElementById('waveform').classList.add('loading');
       document.getElementById('comments-list').innerHTML =
         '<p class="no-comments loading-pulse">Lade Kommentare…</p>';
 
-      const lastSlash = Math.max(filePath.lastIndexOf('/'), filePath.lastIndexOf('\\'));
-      currentFolderPath = filePath.substring(0, lastSlash);
-      currentVersionName = versionName;
+      currentSongId = song.id;
+      currentVersionId = version.id;
+      currentVersionName = version.filename;
 
-      const audioBytes = await invoke("load_audio_file", { path: filePath });
-      const ext = filePath.split('.').pop().toLowerCase();
-      const mimeType = ext === 'wav' ? 'audio/wav' : 'audio/mpeg';
-      const blob = new Blob([new Uint8Array(audioBytes)], { type: mimeType });
+      const source = await api.resolveAudio(version);
+      const bytes = source.kind === 'local'
+        ? await invoke('load_audio_file', { path: source.path })
+        : await invoke('fetch_audio', { versionId: version.id });
+
+      const ext = version.filename.split('.').pop().toLowerCase();
+      const blob = new Blob([new Uint8Array(bytes)], {
+        type: ext === 'wav' ? 'audio/wav' : 'audio/mpeg',
+      });
 
       wsRegions.clearRegions();
       window.renderedRegions = {};
@@ -418,18 +449,11 @@ window.addEventListener("DOMContentLoaded", async () => {
       document.getElementById("comment-ui").style.display = "block";
 
       wavesurfer.load(URL.createObjectURL(blob));
-
-      // Kommentare laden während WaveSurfer noch dekodiert
-      try {
-        const commentsJson = await invoke("read_comments", { folderPath: currentFolderPath });
-        allFolderComments = JSON.parse(commentsJson);
-      } catch (err) {
-        console.error("Fehler beim Laden der Kommentare:", err);
-        allFolderComments = [];
-      }
+      await reloadComments();
 
       wavesurfer.once('ready', () => {
-        currentSongTitle.textContent = "▶ " + versionName;
+        currentSongTitle.textContent =
+          (source.kind === 'local' ? "▶ " : "☁ ") + version.filename;
         document.getElementById('waveform').classList.remove('loading');
         renderComments();
       });
@@ -457,17 +481,24 @@ window.addEventListener("DOMContentLoaded", async () => {
     const listDiv = document.getElementById("comments-list");
 
     // Filter nach aktueller Version
-    let versionComments = allFolderComments.filter(c => c.version === currentVersionName);
+    // Kommentare ohne Zeitbezug (anchorType 'none') gelten fuer den ganzen
+    // Song und bleiben deshalb ueber Versionsgrenzen hinweg sichtbar.
+    let versionComments = allFolderComments.filter(
+      c => !c.versionId || c.versionId === currentVersionId);
 
     // Regions zeichnen – KEINE id an addRegion übergeben!
     // WaveSurfer v7 überschreibt bei gleicher id eine vorhandene Region statt
     // eine neue zu erstellen → nur eine Region wurde sichtbar.
     // Fix: Region ohne id erstellen, id danach manuell setzen.
     versionComments.forEach(comment => {
+      // Ohne Zeitbezug gibt es nichts zu zeichnen.
+      if (comment.anchorType === 'none' || comment.deleted) return;
       const color = memberColor(comment.author);
       const region = wsRegions.addRegion({
         start: comment.start,
-        end: comment.end,
+        // Pin-Kommentare haben keine Ausdehnung; WaveSurfer zeichnet sie dann
+        // als Marker statt als Bereich.
+        end: comment.anchorType === 'point' ? undefined : comment.end,
         color: color + "80",
         drag: false,
         resize: false,
@@ -543,16 +574,30 @@ window.addEventListener("DOMContentLoaded", async () => {
     }
   };
 
-  // --- EDIT ---
+  // --- BEARBEITEN UND LOESCHEN ---
   window.editComment = async function(id) {
-    const comment = allFolderComments.find(c => c.id === id);
+    const comment = findCommentById(allFolderComments, id);
     if (!comment) return;
     const newText = prompt("Kommentar bearbeiten:", comment.text);
-    if (newText !== null && newText.trim() !== "") {
-      comment.text = newText.trim();
-      await saveToServer();
-      renderComments();
+    if (newText === null || newText.trim() === "") return;
+    try {
+      await api.updateComment(id, { text: newText.trim() });
+    } catch (err) {
+      alert("Bearbeiten fehlgeschlagen: " + err);
     }
+    await reloadComments();
+    renderComments();
+  };
+
+  window.removeComment = async function(id) {
+    if (!confirm("Kommentar wirklich löschen?")) return;
+    try {
+      await api.deleteComment(id);
+    } catch (err) {
+      alert("Löschen fehlgeschlagen: " + err);
+    }
+    await reloadComments();
+    renderComments();
   };
 
   // --- ANTWORTEN ---
@@ -561,50 +606,52 @@ window.addEventListener("DOMContentLoaded", async () => {
     const input = document.getElementById(`reply-input-${commentId}`);
     const text = input.value.trim();
     if (!text) return;
+    input.value = "";
 
-    const target = findCommentById(allFolderComments, commentId);
-    if (target) {
-      if (!target.replies) target.replies = [];
-      target.replies.push({
-        id: Date.now().toString() + Math.random().toString(36).slice(2, 5),
-        author: currentConfig.current_user,
+    try {
+      await api.createComment({
+        id: api.ulid(),
+        songId: currentSongId,
+        parentId: commentId,
+        anchorType: "none",
         text,
-        timestamp: new Date().toISOString(),
-        replies: []
       });
-      await saveToServer();
-      renderComments();
+    } catch (err) {
+      alert("Antwort konnte nicht gespeichert werden: " + err);
     }
+    await reloadComments();
+    renderComments();
   };
 
   // --- REACTIONS ---
   window.toggleReaction = async function(commentId, emoji) {
-    const comment = allFolderComments.find(c => c.id === commentId);
+    // Sucht jetzt rekursiv: frueher fand .find() nur die oberste Ebene, eine
+    // Reaktion auf eine Antwort lief deshalb ins Leere.
+    const comment = findCommentById(allFolderComments, commentId);
     if (!comment) return;
-    if (!comment.reactions) comment.reactions = {};
-    if (!comment.reactions[emoji]) comment.reactions[emoji] = [];
-
-    const userIndex = comment.reactions[emoji].indexOf(currentConfig.current_user);
-    if (userIndex === -1) {
-      comment.reactions[emoji].push(currentConfig.current_user);
-    } else {
-      comment.reactions[emoji].splice(userIndex, 1);
+    const reacted = comment.reactions?.[emoji]?.includes(currentConfig.current_user);
+    try {
+      if (reacted) await api.removeReaction(commentId, emoji);
+      else await api.addReaction(commentId, emoji);
+    } catch (err) {
+      console.error("Reaktion fehlgeschlagen:", err);
     }
-
-    await saveToServer();
+    await reloadComments();
     renderComments();
   };
 
-  // --- SPEICHERN ---
-  async function saveToServer() {
+  // --- KOMMENTARE NACHLADEN ---
+  // Frueher wurde bei jeder Aenderung die komplette comments.json
+  // zurueckgeschrieben - kommentierten zwei Leute gleichzeitig, gewann der
+  // Letzte. Jetzt geht jede Aenderung einzeln an die API.
+  async function reloadComments() {
+    if (!currentSongId) return;
     try {
-      await invoke("save_comments", {
-        folderPath: currentFolderPath,
-        commentsJson: JSON.stringify(allFolderComments, null, 2)
-      });
+      const data = await api.getComments(currentSongId);
+      allFolderComments = api.toTree(data.comments);
     } catch (err) {
-      console.error("Fehler beim Speichern:", err);
-      alert("Fehler beim Speichern auf der Festplatte!");
+      console.error("Kommentare konnten nicht geladen werden:", err);
+      allFolderComments = [];
     }
   }
 
@@ -617,32 +664,32 @@ window.addEventListener("DOMContentLoaded", async () => {
     }
   });
 
-  // --- ORDNER SCANNEN ---
-  try {
-    const songs = await invoke("scan_directory");
+  // --- SEITENLEISTE ---
+  function renderSidebar() {
     folderList.innerHTML = "";
-
     if (songs.length === 0) {
-      folderList.innerHTML = "<p style='color:#888;font-size:0.85em;'>Keine Audio-Dateien gefunden.</p>";
+      folderList.innerHTML =
+        "<p style='color:#888;font-size:0.85em;'>Noch keine Songs. Leg eine MP3 in den pre_pro-Ordner.</p>";
+      return;
     }
 
-    songs.forEach(songFolder => {
+    songs.forEach(song => {
       const songDiv = document.createElement("div");
       songDiv.className = "song-folder";
-      songDiv.innerHTML = `<span class="folder-icon">📁</span> ${songFolder.name}`;
+      songDiv.innerHTML = `<span class="folder-icon">📁</span> ${song.name}`;
 
       const versionsDiv = document.createElement("div");
       versionsDiv.className = "song-versions";
 
-      songFolder.versions.forEach(version => {
+      song.versions.forEach(version => {
         const versionDiv = document.createElement("div");
         versionDiv.className = "version-item";
-        versionDiv.innerHTML = `<span class="track-icon">🎵</span> ${version.name}`;
+        versionDiv.innerHTML = `<span class="track-icon">🎵</span> ${version.filename}`;
         versionDiv.addEventListener("click", (e) => {
           e.stopPropagation();
           document.querySelectorAll('.version-item').forEach(v => v.classList.remove('active-track'));
           versionDiv.classList.add('active-track');
-          loadAudioFromDisk(version.path, version.name);
+          loadVersion(song, version);
         });
         versionsDiv.appendChild(versionDiv);
       });
@@ -656,7 +703,112 @@ window.addEventListener("DOMContentLoaded", async () => {
       folderList.appendChild(songDiv);
       songDiv.appendChild(versionsDiv);
     });
-  } catch (error) {
-    folderList.innerHTML = `<p style="color: #f87171;">Fehler beim Scannen: ${error}</p>`;
+  }
+
+
+  // --- EINRICHTUNG ---
+  // Erscheint, solange kein Geraetetoken hinterlegt ist. Bewusst schlicht:
+  // Phase 3 baut die Oberflaeche ohnehin um.
+  function showSetup(settings, errorText) {
+    document.getElementById("comment-ui").style.display = "none";
+    document.getElementById("waveform").style.display = "none";
+    document.getElementById("transport").style.display = "none";
+    currentSongTitle.textContent = "";
+    folderList.innerHTML = "<p style='color:#888;font-size:0.85em;'>Erst einrichten.</p>";
+
+    outputDiv.innerHTML = `
+      <div class="comment-input-wrap" style="max-width:640px">
+        <h4>Einrichtung</h4>
+        ${errorText ? `<p style="color:var(--red);font-size:.8rem;margin-bottom:10px">${errorText}</p>` : ''}
+        <p style="color:var(--text-dim);font-size:.82rem;line-height:1.55;margin-bottom:12px">
+          Das Gerätetoken holst du dir einmalig im Browser. Es wird lokal
+          gespeichert und verlässt diesen Rechner nicht.
+        </p>
+        <label style="display:block;font-size:.72rem;color:var(--text-dim);margin-bottom:4px">API-Adresse</label>
+        <input type="text" id="setup-url" class="reply-input" style="max-width:100%"
+               placeholder="https://songou-api.<name>.workers.dev"
+               value="${settings.apiBaseUrl || ''}">
+
+        <div style="margin:12px 0 4px">
+          <button class="transport-btn" id="setup-pair">Token holen</button>
+        </div>
+        <label style="display:block;font-size:.72rem;color:var(--text-dim);margin:10px 0 4px">Gerätetoken</label>
+        <input type="text" id="setup-token" class="reply-input" style="max-width:100%"
+               placeholder="${settings.hasToken ? 'hinterlegt — leer lassen zum Beibehalten' : 'hier einfügen'}">
+
+        <label style="display:block;font-size:.72rem;color:var(--text-dim);margin:12px 0 4px">pre_pro-Ordner</label>
+        <div style="display:flex;gap:8px;align-items:center">
+          <input type="text" id="setup-folder" class="reply-input" style="flex:1;max-width:100%"
+                 value="${settings.preProPath || ''}" placeholder="noch nicht gewählt">
+          <button class="transport-btn" id="setup-browse">Wählen…</button>
+        </div>
+
+        <div style="margin-top:16px">
+          <button class="transport-btn" id="setup-save">Speichern</button>
+          <span id="setup-status" style="margin-left:10px;font-size:.75rem;color:var(--text-dim)"></span>
+        </div>
+      </div>`;
+
+    document.getElementById('setup-pair').addEventListener('click', () => {
+      const base = document.getElementById('setup-url').value.trim();
+      // Die Kopplungsseite liegt auf dem auth-Worker, nicht auf der API.
+      const pairUrl = base.replace('songou-api', 'songou-auth') + '/pair';
+      invoke('open_pair_page', { url: pairUrl }).catch((err) => alert(err));
+    });
+
+    document.getElementById('setup-browse').addEventListener('click', async () => {
+      const picked = await invoke('pick_folder');
+      if (picked) document.getElementById('setup-folder').value = picked;
+    });
+
+    document.getElementById('setup-save').addEventListener('click', async () => {
+      const status = document.getElementById('setup-status');
+      status.textContent = 'Speichere…';
+      try {
+        await invoke('save_settings', {
+          apiBaseUrl: document.getElementById('setup-url').value.trim(),
+          deviceToken: document.getElementById('setup-token').value.trim() || null,
+          preProPath: document.getElementById('setup-folder').value.trim(),
+        });
+        document.getElementById("waveform").style.display = "";
+        document.getElementById("transport").style.display = "";
+        await startup();
+      } catch (err) {
+        status.textContent = 'Fehlgeschlagen: ' + err;
+      }
+    });
+  }
+
+  // Der Tray-Eintrag "Ordner wählen" schickt hierher.
+  listen('choose-folder', async () => {
+    const settings = await invoke('get_settings');
+    showSetup(settings);
+  });
+
+  // --- START ---
+  await startup();
+
+  async function startup() {
+    const settings = await invoke("get_settings");
+    if (!settings.hasToken || !settings.apiBaseUrl) {
+      showSetup(settings);
+      return;
+    }
+    try {
+      await loadBootstrap();
+    } catch (err) {
+      showSetup(settings, "Verbindung fehlgeschlagen: " + err);
+      return;
+    }
+    renderHeader();
+    renderSidebar();
+
+    // Der Sync-Agent meldet neue Versionen - dann Bibliothek nachziehen.
+    listen('feed-updated', async () => {
+      try {
+        await loadBootstrap();
+        renderSidebar();
+      } catch {}
+    });
   }
 });
