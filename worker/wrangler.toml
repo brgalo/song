@@ -9,7 +9,7 @@ compatibility_date = "2026-08-01"
 [[d1_databases]]
 binding = "DB"
 database_name = "songou"
-database_id = "HIER_DATABASE_ID_EINTRAGEN"
+database_id = "69f9807b-6066-46dd-b162-7ae23671229a"
 
 [[r2_buckets]]
 binding = "BUCKET"
@@ -17,6 +17,6 @@ bucket_name = "songou-audio"
 
 [vars]
 # Aus dem Zero-Trust-Dashboard: Settings → Custom Pages → Team domain
-ACCESS_TEAM_DOMAIN = "DEINTEAM.cloudflareaccess.com"
+ACCESS_TEAM_DOMAIN = "blue-frog-d37c.cloudflareaccess.com"
 # Application Audience (AUD) Tag der Access-Anwendung vor songou-auth
 ACCESS_AUD = "HIER_AUD_TAG_EINTRAGEN"
