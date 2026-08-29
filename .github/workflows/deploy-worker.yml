@@ -39,15 +39,35 @@ jobs:
           done
           npm test
 
+      # Solange Token oder echte database_id fehlen, wird der Deploy sauber
+      # uebersprungen statt fehlzuschlagen. Die Tests oben laufen trotzdem -
+      # sie brauchen weder Secret noch echte IDs.
+      - name: Sind die Deploy-Zugangsdaten vollstaendig?
+        id: bereit
+        env:
+          TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          if [ -z "$TOKEN" ]; then
+            echo "::notice::CLOUDFLARE_API_TOKEN fehlt - Deploy uebersprungen."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          elif grep -q HIER_DATABASE_ID_EINTRAGEN wrangler.toml wrangler.auth.toml; then
+            echo "::notice::database_id ist noch ein Platzhalter - Deploy uebersprungen."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
       # Der API-Token ist das EINZIGE echte Geheimnis im ganzen Projekt.
       # Er authentifiziert wrangler gegenueber Cloudflare und landet niemals
       # in einem Artefakt - weder im Worker-Code noch in der Desktop-Binary.
       - name: songou-api deployen
+        if: steps.bereit.outputs.ready == 'true'
         run: npx wrangler deploy --config wrangler.toml
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
 
       - name: songou-auth deployen
+        if: steps.bereit.outputs.ready == 'true'
         run: npx wrangler deploy --config wrangler.auth.toml
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
